@@ -1,137 +1,127 @@
 import React, { useRef, useState } from "react";
 import axios from "axios";
-import {
-  Box,
-  Tabs,
-  Tab,
-  TextField,
-  Typography,
-  Paper,
-  Stack,
-  Button,
-  Divider,
-} from "@mui/material";
-import { SketchCanvas, SketchCanvasRef } from "../components/DrawingCanvas";
-import ResultViewer from "../components/ResultViewer";
+import { Box, Button, TextField, Typography, Paper } from "@mui/material";
 
 function Generator() {
-  const [mode, setMode] = useState<"txt2img" | "img2img">("txt2img");
   const [prompt, setPrompt] = useState("");
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [resultUrl, setResultUrl] = useState<string>("");
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [lines, setLines] = useState<number[][]>([]);
+  const [loading, setLoading] = useState(false);
 
-  const canvasRef = useRef<SketchCanvasRef>(null);
-
+  // ---------------- Generate Floor Plan Image ----------------
   const handleGenerate = async () => {
-    const formData = new FormData();
-    formData.append("prompt", prompt);
-
-    if (mode === "img2img") {
-      if (imageFile) {
-        formData.append("image", imageFile);
-      } else if (canvasRef.current) {
-        const blob = await canvasRef.current.getImageBlob();
-        formData.append("image", blob, "canvas.png");
-      } else {
-        alert("Upload or draw a sketch.");
-        return;
-      }
+    if (!prompt) return alert("Enter a prompt");
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append("prompt", prompt);
+      const res = await axios.post(
+        "http://127.0.0.1:8000/txt2floorplan",
+        formData,
+        { responseType: "blob" }
+      );
+      setPreviewUrl(URL.createObjectURL(res.data));
+      setLines([]); // reset previous lines
+    } catch (err) {
+      console.error(err);
+      alert("Error generating floor plan");
+    } finally {
+      setLoading(false);
     }
-
-    const endpoint =
-      mode === "txt2img"
-        ? "http://localhost:8000/txt2img"
-        : "http://localhost:8000/img2img";
-
-    const res = await axios.post(endpoint, formData, {
-      responseType: "blob",
-    });
-
-    const imageUrl = URL.createObjectURL(res.data);
-    setResultUrl(imageUrl);
-
-    const historyItem = {
-      prompt,
-      imageUrl,
-      mode,
-      timestamp: new Date().toISOString(),
-    };
-
-    const history = JSON.parse(localStorage.getItem("history") || "[]");
-    history.unshift(historyItem);
-    localStorage.setItem("history", JSON.stringify(history));
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleGenerate();
+  // ---------------- Convert Image to JSON Lines ----------------
+  const handleConvertToJSON = async () => {
+    if (!previewUrl) return alert("Generate a floor plan first");
+    setLoading(true);
+    try {
+      const blob = await fetch(previewUrl).then(r => r.blob());
+      const formData = new FormData();
+      formData.append("image", blob, "floorplan.png");
+
+      const res = await axios.post(
+        "http://127.0.0.1:8000/img2json",
+        formData
+      );
+      setLines(res.data.lines);
+    } catch (err) {
+      console.error(err);
+      alert("Error converting to JSON");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ---------------- Download DXF ----------------
+  const handleDownloadDXF = async () => {
+    if (lines.length === 0) return alert("Convert to JSON first");
+    setLoading(true);
+    try {
+      const res = await axios.post(
+        "http://127.0.0.1:8000/json2dxf",
+        { lines },
+        { responseType: "blob" }
+      );
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "floorplan.dxf";
+      a.click();
+    } catch (err) {
+      console.error(err);
+      alert("Error downloading DXF");
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <Box sx={{ ml: { md: 30, xs: 0 }, p: 3, maxWidth: "800px", mx: "auto" }}>
-      <Typography variant="h4" fontWeight="bold" gutterBottom>
-        AI Architectural Generator
+    <Box sx={{ maxWidth: 600, mx: "auto", mt: 4 }}>
+      <Typography variant="h4" gutterBottom>
+        AI 2D Floor Plan Generator
       </Typography>
 
-      <Paper elevation={2} sx={{ p: 3, borderRadius: 3 }}>
-        <Tabs
-          value={mode}
-          onChange={(e, v) => {
-            setMode(v);
-            setResultUrl("");
-          }}
-          variant="fullWidth"
-          textColor="primary"
-          indicatorColor="primary"
-          sx={{ mb: 3 }}
-        >
-          <Tab label="Text to Image" value="txt2img" />
-          <Tab label="Image to Image" value="img2img" />
-        </Tabs>
+      <TextField
+        fullWidth
+        multiline
+        minRows={3}
+        label="Enter floor plan prompt"
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        sx={{ mb: 2 }}
+      />
 
-        <TextField
-          fullWidth
-          multiline
-          minRows={3}
-          label="Enter your creative prompt"
-          variant="outlined"
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          onKeyDown={handleKeyDown}
-          sx={{ mb: 3 }}
-        />
+      <Button
+        variant="contained"
+        onClick={handleGenerate}
+        disabled={loading}
+        sx={{ mr: 2 }}
+      >
+        {loading ? "Generating..." : "Generate Floor Plan"}
+      </Button>
 
-        {mode === "img2img" && (
-          <Stack spacing={2} mb={3}>
-            <Button variant="outlined" component="label">
-              Upload Image
-              <input
-                type="file"
-                hidden
-                accept="image/*"
-                onChange={(e) => setImageFile(e.target.files?.[0] || null)}
-              />
-            </Button>
-            <Typography variant="body2" color="text.secondary">
-              or draw a sketch below:
-            </Typography>
-            <SketchCanvas ref={canvasRef} />
-          </Stack>
-        )}
-      </Paper>
+      <Button
+        variant="outlined"
+        onClick={handleConvertToJSON}
+        disabled={loading || !previewUrl}
+        sx={{ mr: 2 }}
+      >
+        Convert to JSON
+      </Button>
 
-      {resultUrl && (
-        <>
-          <Divider sx={{ my: 4 }} />
-          <Paper elevation={3} sx={{ p: 2, borderRadius: 3 }}>
-            <Typography variant="h6" gutterBottom>
-              Generated Image
-            </Typography>
-            <ResultViewer url={resultUrl} />
-          </Paper>
-        </>
+      <Button
+        variant="contained"
+        color="success"
+        onClick={handleDownloadDXF}
+        disabled={loading || lines.length === 0}
+      >
+        Download DXF
+      </Button>
+
+      {previewUrl && (
+        <Paper sx={{ mt: 4, p: 2 }}>
+          <img src={previewUrl} alt="Floor Plan" style={{ width: "100%" }} />
+        </Paper>
       )}
     </Box>
   );
